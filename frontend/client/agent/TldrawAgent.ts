@@ -1,6 +1,6 @@
 import { Editor, RecordsDiff, reverseRecordsDiff, structuredClone, TLRecord } from 'tldraw'
 import { convertTldrawShapeToFocusedShape } from '../../shared/format/convertTldrawShapeToFocusedShape'
-import { AgentModelName } from '../../shared/models'
+import { AgentModelName, DEFAULT_MODEL_NAME, isValidModelName } from '../../shared/models'
 import { AgentAction } from '../../shared/types/AgentAction'
 import { AgentInput } from '../../shared/types/AgentInput'
 import { AgentPrompt, BaseAgentPrompt } from '../../shared/types/AgentPrompt'
@@ -189,8 +189,10 @@ export class TldrawAgent {
 		if (state.contextItems) {
 			this.context.setItems(state.contextItems)
 		}
-		if (state.modelName) {
+		if (state.modelName && isValidModelName(state.modelName)) {
 			this.modelName.setModelName(state.modelName)
+		} else if (state.modelName) {
+			this.modelName.setModelName(DEFAULT_MODEL_NAME)
 		}
 		if (state.debugFlags) {
 			this.debug.setDebugFlags(state.debugFlags)

@@ -4,6 +4,8 @@ import { AtIcon } from '../../shared/icons/AtIcon'
 import { BrainIcon } from '../../shared/icons/BrainIcon'
 import { ChevronDownIcon } from '../../shared/icons/ChevronDownIcon'
 import { AGENT_MODEL_DEFINITIONS, AgentModelName } from '../../shared/models'
+
+const AGENT_MODEL_OPTIONS = Object.values(AGENT_MODEL_DEFINITIONS)
 import { useAgent } from '../agent/TldrawAgentAppProvider'
 import { VoiceInputButton } from './VoiceInputButton'
 import { ContextItemTag } from './ContextItemTag'
@@ -102,17 +104,21 @@ export function ChatInput({
 							<div className="chat-model-select-label">
 								<BrainIcon /> {modelName}
 							</div>
-							<select
-								value={modelName}
-								onChange={(e) => agent.modelName.setModelName(e.target.value as AgentModelName)}
-							>
-								{Object.values(AGENT_MODEL_DEFINITIONS).map((model) => (
-									<option key={model.name} value={model.name}>
-										{model.name}
-									</option>
-								))}
-							</select>
-							<ChevronDownIcon />
+							{AGENT_MODEL_OPTIONS.length > 1 ? (
+								<>
+									<select
+										value={modelName}
+										onChange={(e) => agent.modelName.setModelName(e.target.value as AgentModelName)}
+									>
+										{AGENT_MODEL_OPTIONS.map((model) => (
+											<option key={model.name} value={model.name}>
+												{model.name}
+											</option>
+										))}
+									</select>
+									<ChevronDownIcon />
+								</>
+							) : null}
 						</div>
 					</div>
 					<button className="chat-input-submit" disabled={inputValue === '' && !isGenerating}>

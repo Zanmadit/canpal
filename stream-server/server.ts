@@ -6,8 +6,6 @@ import type { AgentPrompt } from 'shared/types/AgentPrompt'
 function streamEnv(): Environment {
 	return {
 		OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? '',
-		ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',
-		GOOGLE_API_KEY: process.env.GOOGLE_API_KEY ?? '',
 		AGENT_DURABLE_OBJECT: undefined as unknown as Environment['AGENT_DURABLE_OBJECT'],
 	}
 }
