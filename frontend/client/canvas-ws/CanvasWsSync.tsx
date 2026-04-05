@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { TLShape, TLShapeId } from 'tldraw'
+import type { Editor, TLShape, TLShapeId } from 'tldraw'
 import { useEditor, useValue } from 'tldraw'
 import { isCollabWireShapeType, shapeToWirePayload } from './collabShapeWire'
 import { resolveCanvasProfile } from './canvasProfile'
@@ -51,6 +51,23 @@ function hueForClientId(id: string): number {
 	let h = 0
 	for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
 	return h % 360
+}
+
+/** Push every geo/draw on the page so the server has strokes drawn before the socket opened (or while disconnected). */
+function reconcilePageCollabWireShapesToServer(editor: Editor, ws: WebSocket, clientId: string): void {
+	if (ws.readyState !== WebSocket.OPEN) return
+	for (const shape of editor.getCurrentPageShapes()) {
+		if (!isCollabWireShapeType(shape.type)) continue
+		const payload = shapeToWirePayload(editor, shape)
+		if (!payload) continue
+		ws.send(
+			JSON.stringify({
+				action: 'update',
+				data: payload,
+				client_id: clientId,
+			})
+		)
+	}
 }
 
 type RemoteCursor = { x: number; y: number; label: string; at: number }
@@ -179,6 +196,7 @@ export function CanvasWsSync() {
 
 		ws.onopen = () => {
 			setWsReady(true)
+			reconcilePageCollabWireShapesToServer(editor, ws, profileRef.current!.clientId)
 			bump((n) => n + 1)
 		}
 		ws.onclose = () => {
@@ -196,7 +214,6 @@ export function CanvasWsSync() {
 	}, [editor])
 
 	useEffect(() => {
-		if (!wsReady) return
 		const unsub = editor.store.listen(
 			(entry) => {
 				if (applyingRemoteRef.current) return
@@ -266,7 +283,7 @@ export function CanvasWsSync() {
 			updateThrottleRef.current.clear()
 			unsub()
 		}
-	}, [editor, wsReady])
+	}, [editor])
 
 	useEffect(() => {
 		if (!wsReady) return

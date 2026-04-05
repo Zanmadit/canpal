@@ -128,8 +128,21 @@ export function VoiceInputButton() {
 
 	const startRecording = useCallback(async () => {
 		if (phaseRef.current !== 'idle') return
+		const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined
+		if (!mediaDevices?.getUserMedia) {
+			const needsHttps =
+				typeof window !== 'undefined' && typeof window.isSecureContext === 'boolean' && !window.isSecureContext
+			toasts.addToast({
+				title: 'Microphone',
+				description: needsHttps
+					? 'Voice needs a secure page (HTTPS or localhost). Plain HTTP hides the microphone API.'
+					: 'Microphone is not available in this browser.',
+				severity: 'error',
+			})
+			return
+		}
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+			const stream = await mediaDevices.getUserMedia({ audio: true })
 			streamRef.current = stream
 			chunksRef.current = []
 			const mime = pickMimeType()
