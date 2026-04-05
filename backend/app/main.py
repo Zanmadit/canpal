@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
+from config import settings
 from app.services.connection_manager import manager
 from app.services.canvas_agent import run_agent_turn
 from app.services.higgsfield_image import credentials_configured, generate_image_bytes
@@ -31,11 +32,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Brainstorm AI Agent API", lifespan=lifespan)
 
-# Allow frontend to connect
+_cors_raw = (settings.CORS_ALLOW_ORIGINS or "").strip()
+if _cors_raw == "*":
+    _allow_origins = ["*"]
+    _allow_credentials = False
+else:
+    _allow_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+    if not _allow_origins:
+        _allow_origins = ["*"]
+        _allow_credentials = False
+    else:
+        _allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict this in production
-    allow_credentials=True,
+    allow_origins=_allow_origins,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

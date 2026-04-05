@@ -1,0 +1,65 @@
+# Single-host stack. To grow: push these images to ECR and run on ECS Fargate + ALB with the same path layout,
+# or host only `api` on AWS and keep the Worker UI on Cloudflare with VITE_API_BASE_URL / VITE_CANVAS_WS_URL pointing at the API.
+
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-*}
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  stream:
+    build:
+      context: .
+      dockerfile: stream-server/Dockerfile
+    env_file:
+      - .env
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+      args:
+        VITE_API_BASE_URL: ${PUBLIC_ORIGIN:-http://localhost}
+        VITE_CANVAS_WS_URL: ${PUBLIC_ORIGIN:-http://localhost}
+    ports:
+      - "${WEB_PORT:-80}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+      stream:
+        condition: service_healthy
+    restart: unless-stopped

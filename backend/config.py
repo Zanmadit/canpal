@@ -25,5 +25,8 @@ class Settings(BaseSettings):
     HIGGSFIELD_IMAGE_ASPECT_RATIO: str = "1:1"
     HIGGSFIELD_IMAGE_RESOLUTION: str = "720p"
 
+    # Comma-separated origins for browser clients, or "*" for any (not valid with credentials).
+    CORS_ALLOW_ORIGINS: str = "*"
+
 
 settings = Settings()
