@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { TLShape, TLShapeId } from 'tldraw'
 import { useEditor, useValue } from 'tldraw'
+import { isCollabWireShapeType, shapeToWirePayload } from './collabShapeWire'
 import { resolveCanvasProfile } from './canvasProfile'
 import { sendAgentPromptHttp, setCanvasWsBridge, type CanvasWsBridge } from './canvasWsBridge'
-import { deleteWireShape, syncWireInit, upsertWireGeo, type WireServerElement } from './wireGeoUpsert'
+import {
+	applyWireServerElement,
+	deleteWireShape,
+	syncWireInit,
+	type WireServerElement,
+} from './wireGeoUpsert'
 
 /** Must match `AGENT_CLIENT_ID` in FastAPI `connection_manager.py`. */
 const AGENT_CANVAS_CLIENT_ID = 'openai-agent'
@@ -54,6 +61,8 @@ export function CanvasWsSync() {
 	if (profileRef.current === null) profileRef.current = resolveCanvasProfile()
 
 	const wsRef = useRef<WebSocket | null>(null)
+	const applyingRemoteRef = useRef(false)
+	const updateThrottleRef = useRef<Map<TLShapeId, ReturnType<typeof setTimeout>>>(new Map())
 	const [, bump] = useState(0)
 	const [wsReady, setWsReady] = useState(false)
 	const [remoteCursors, setRemoteCursors] = useState<Record<string, RemoteCursor>>({})
@@ -108,8 +117,9 @@ export function CanvasWsSync() {
 			const full = parseWireMessage(ev.data as string)
 			if (!full) return
 			const { action, data, client_id } = full
+			const selfId = profileRef.current!.clientId
 
-			if (action === 'cursor' && client_id && client_id !== profileRef.current!.clientId) {
+			if (action === 'cursor' && client_id && client_id !== selfId) {
 				const x = Number(data.x)
 				const y = Number(data.y)
 				if (!Number.isFinite(x) || !Number.isFinite(y)) return
@@ -132,17 +142,38 @@ export function CanvasWsSync() {
 			if (action === 'init') {
 				const elements = (data as { elements?: Record<string, WireServerElement> }).elements
 				if (elements && typeof elements === 'object') {
-					syncWireInit(editor, elements)
+					applyingRemoteRef.current = true
+					try {
+						syncWireInit(editor, elements)
+					} finally {
+						applyingRemoteRef.current = false
+					}
 				}
 				return
 			}
 			if (action === 'create' || action === 'update') {
-				upsertWireGeo(editor, data as unknown as WireServerElement)
+				if (client_id === selfId) return
+				const el = data as unknown as WireServerElement
+				if (!isCollabWireShapeType(el.type)) return
+				applyingRemoteRef.current = true
+				try {
+					applyWireServerElement(editor, el)
+				} finally {
+					applyingRemoteRef.current = false
+				}
 				return
 			}
 			if (action === 'delete') {
+				if (client_id === selfId) return
 				const id = (data as { id?: string }).id
-				if (typeof id === 'string') deleteWireShape(editor, id)
+				if (typeof id === 'string') {
+					applyingRemoteRef.current = true
+					try {
+						deleteWireShape(editor, id)
+					} finally {
+						applyingRemoteRef.current = false
+					}
+				}
 			}
 		}
 
@@ -163,6 +194,79 @@ export function CanvasWsSync() {
 			ws.close()
 		}
 	}, [editor])
+
+	useEffect(() => {
+		if (!wsReady) return
+		const unsub = editor.store.listen(
+			(entry) => {
+				if (applyingRemoteRef.current) return
+				const ws = wsRef.current
+				if (!ws || ws.readyState !== WebSocket.OPEN) return
+
+				const sendNow = (action: 'create' | 'update', shape: TLShape) => {
+					const payload = shapeToWirePayload(editor, shape)
+					if (!payload) return
+					ws.send(
+						JSON.stringify({
+							action,
+							data: payload,
+							client_id: profileRef.current!.clientId,
+						})
+					)
+				}
+
+				const scheduleUpdate = (shape: TLShape) => {
+					const id = shape.id
+					const pending = updateThrottleRef.current.get(id)
+					if (pending) clearTimeout(pending)
+					const t = window.setTimeout(() => {
+						updateThrottleRef.current.delete(id)
+						const latest = editor.getShape(id)
+						if (latest && isCollabWireShapeType(latest.type)) {
+							sendNow('update', latest)
+						}
+					}, 90)
+					updateThrottleRef.current.set(id, t)
+				}
+
+				const { changes } = entry
+
+				for (const record of Object.values(changes.added)) {
+					if (record.typeName !== 'shape') continue
+					const shape = record as TLShape
+					if (!isCollabWireShapeType(shape.type)) continue
+					sendNow('create', shape)
+				}
+
+				for (const [, to] of Object.values(changes.updated)) {
+					if (to.typeName !== 'shape') continue
+					const shape = to as TLShape
+					if (!isCollabWireShapeType(shape.type)) continue
+					scheduleUpdate(shape)
+				}
+
+				for (const record of Object.values(changes.removed)) {
+					if (record.typeName !== 'shape') continue
+					const shape = record as TLShape
+					if (!isCollabWireShapeType(shape.type)) continue
+					const rawId = shape.id.startsWith('shape:') ? shape.id.slice('shape:'.length) : shape.id
+					ws.send(
+						JSON.stringify({
+							action: 'delete',
+							data: { id: rawId },
+							client_id: profileRef.current!.clientId,
+						})
+					)
+				}
+			},
+			{ source: 'user', scope: 'document' }
+		)
+		return () => {
+			for (const t of updateThrottleRef.current.values()) clearTimeout(t)
+			updateThrottleRef.current.clear()
+			unsub()
+		}
+	}, [editor, wsReady])
 
 	useEffect(() => {
 		if (!wsReady) return

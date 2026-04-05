@@ -5,6 +5,47 @@
 		<link rel="icon" href="/favicon.ico" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>tldraw agent</title>
+		<!-- Runs before deferred module scripts: tldraw needs crypto.randomUUID on non-secure origins (plain http://). Keep in sync with client/lib/randomUuid.ts -->
+		<script>
+			;(function () {
+				var c = typeof globalThis !== 'undefined' ? globalThis.crypto : null
+				if (!c || typeof c.randomUUID === 'function') return
+				function uuid() {
+					if (c.getRandomValues) {
+						var bytes = new Uint8Array(16)
+						c.getRandomValues(bytes)
+						bytes[6] = (bytes[6] & 15) | 64
+						bytes[8] = (bytes[8] & 63) | 128
+						var hex = Array.prototype.map
+							.call(bytes, function (b) {
+								return ('0' + b.toString(16)).slice(-2)
+							})
+							.join('')
+						return (
+							hex.slice(0, 8) +
+							'-' +
+							hex.slice(8, 12) +
+							'-' +
+							hex.slice(12, 16) +
+							'-' +
+							hex.slice(16, 20) +
+							'-' +
+							hex.slice(20)
+						)
+					}
+					return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (ch) {
+						var r = (Math.random() * 16) | 0
+						var v = ch === 'x' ? r : (r & 3) | 8
+						return v.toString(16)
+					})
+				}
+				try {
+					Object.defineProperty(c, 'randomUUID', { value: uuid, configurable: true, writable: true })
+				} catch (e) {
+					c.randomUUID = uuid
+				}
+			})()
+		</script>
 		<script type="module" crossorigin src="/assets/index-BK9i2FNe.js"></script>
 		<link rel="stylesheet" crossorigin href="/assets/index-DvhIqsed.css">
 	</head>
