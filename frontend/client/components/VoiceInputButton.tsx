@@ -23,6 +23,10 @@ function isTypingTarget(target: EventTarget | null): boolean {
 	return target.isContentEditable
 }
 
+function isMicrophoneApiAvailable(): boolean {
+	return typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+}
+
 /**
  * Voice → Whisper (FastAPI) → same agent path as typed chat (viewport + context items).
  */
@@ -179,6 +183,7 @@ export function VoiceInputButton() {
 			if (e.code !== 'Space' || e.repeat) return
 			if (isTypingTarget(e.target)) return
 			if (phaseRef.current === 'transcribing') return
+			if (!isMicrophoneApiAvailable()) return
 			e.preventDefault()
 			pttRef.current = true
 			if (phaseRef.current === 'idle') {
@@ -214,6 +219,9 @@ export function VoiceInputButton() {
 
 	const busy = phase === 'transcribing'
 	const recording = phase === 'recording'
+	const micOk = isMicrophoneApiAvailable()
+	const insecure =
+		typeof window !== 'undefined' && typeof window.isSecureContext === 'boolean' && !window.isSecureContext
 
 	return (
 		<button
@@ -223,9 +231,15 @@ export function VoiceInputButton() {
 				(recording ? ' voice-input-button--recording' : '') +
 				(busy ? ' voice-input-button--busy' : '')
 			}
-			disabled={busy}
+			disabled={busy || !micOk}
 			onClick={onMicClick}
-			title="Voice: click to start/stop, or hold Space. Requires FastAPI + Whisper."
+			title={
+				!micOk
+					? insecure
+						? 'Voice needs HTTPS or localhost (microphone is hidden on plain HTTP).'
+						: 'Microphone is not available in this browser.'
+					: 'Voice: click to start/stop, or hold Space. Requires FastAPI + Whisper.'
+			}
 		>
 			<span className="voice-input-button__icon" aria-hidden>
 				{busy ? '…' : '🎤'}
