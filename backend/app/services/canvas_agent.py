@@ -23,6 +23,24 @@ MODEL_DEFAULT = "gpt-4o-mini"
 _agent_turn_lock = asyncio.Lock()
 
 
+def _applied_centroid(applied: list[dict[str, Any]]) -> tuple[float, float] | None:
+    """Average page position of created/updated shapes so the agent has a visible “presence” point."""
+    xs: list[float] = []
+    ys: list[float] = []
+    for row in applied:
+        if row.get("action") == "delete":
+            continue
+        try:
+            if "x" in row and "y" in row:
+                xs.append(float(row["x"]))
+                ys.append(float(row["y"]))
+        except (TypeError, ValueError):
+            continue
+    if not xs:
+        return None
+    return (sum(xs) / len(xs), sum(ys) / len(ys))
+
+
 def _normalize_element_status(raw: Any) -> None:
     """Mutate dict: keep only tentative|committed as status, or remove key."""
     if "status" not in raw:
@@ -523,6 +541,17 @@ User says:
         if msg.content:
             last_reply = (last_reply + "\n" + msg.content).strip()
         break
+
+    centroid = _applied_centroid(all_applied)
+    if centroid and manager.active_connections:
+        cx, cy = centroid
+        await manager.broadcast_all(
+            WebSocketMessage(
+                action=ActionType.CURSOR,
+                data={"x": cx, "y": cy, "label": "Agent"},
+                client_id=AGENT_CLIENT_ID,
+            ).model_dump_json()
+        )
 
     return {
         "ok": True,

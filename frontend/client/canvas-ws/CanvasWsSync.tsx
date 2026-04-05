@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEditor, useValue } from 'tldraw'
+import { resolveCanvasProfile } from './canvasProfile'
 import { sendAgentPromptHttp, setCanvasWsBridge, type CanvasWsBridge } from './canvasWsBridge'
 import { deleteWireShape, syncWireInit, upsertWireGeo, type WireServerElement } from './wireGeoUpsert'
+
+/** Must match `AGENT_CLIENT_ID` in FastAPI `connection_manager.py`. */
+const AGENT_CANVAS_CLIENT_ID = 'openai-agent'
+
+const CURSOR_STALE_MS = 12_000
+const CURSOR_SEND_MS = 90
 
 function wsUrlFromEnv(): string | null {
 	const raw = import.meta.env.VITE_CANVAS_WS_URL
@@ -11,22 +18,45 @@ function wsUrlFromEnv(): string | null {
 	return u
 }
 
-function parseMessage(raw: string): { action: string; data: Record<string, unknown> } | null {
+function parseWireMessage(raw: string): {
+	action: string
+	data: Record<string, unknown>
+	client_id: string
+} | null {
 	try {
-		const msg = JSON.parse(raw) as { action?: string; data?: Record<string, unknown> }
+		const msg = JSON.parse(raw) as {
+			action?: string
+			data?: unknown
+			client_id?: string
+		}
 		if (!msg.action || typeof msg.data !== 'object' || !msg.data) return null
-		return { action: msg.action, data: msg.data }
+		return {
+			action: msg.action,
+			data: msg.data as Record<string, unknown>,
+			client_id: typeof msg.client_id === 'string' ? msg.client_id : '',
+		}
 	} catch {
 		return null
 	}
 }
 
+function hueForClientId(id: string): number {
+	let h = 0
+	for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
+	return h % 360
+}
+
+type RemoteCursor = { x: number; y: number; label: string; at: number }
+
 export function CanvasWsSync() {
 	const editor = useEditor()
-	const clientIdRef = useRef(crypto.randomUUID())
+	const profileRef = useRef<ReturnType<typeof resolveCanvasProfile> | null>(null)
+	if (profileRef.current === null) profileRef.current = resolveCanvasProfile()
+
 	const wsRef = useRef<WebSocket | null>(null)
 	const [, bump] = useState(0)
 	const [wsReady, setWsReady] = useState(false)
+	const [remoteCursors, setRemoteCursors] = useState<Record<string, RemoteCursor>>({})
 
 	const sendCanvasPatch = useCallback((action: string, data: Record<string, unknown>) => {
 		const ws = wsRef.current
@@ -35,7 +65,7 @@ export function CanvasWsSync() {
 			JSON.stringify({
 				action,
 				data,
-				client_id: clientIdRef.current,
+				client_id: profileRef.current!.clientId,
 			})
 		)
 	}, [])
@@ -49,7 +79,7 @@ export function CanvasWsSync() {
 				JSON.stringify({
 					action: 'agent_prompt',
 					data: { message: t },
-					client_id: clientIdRef.current,
+					client_id: profileRef.current!.clientId,
 				})
 			)
 			return
@@ -69,14 +99,36 @@ export function CanvasWsSync() {
 		const urlBase = wsUrlFromEnv()
 		if (!urlBase) return
 
-		const url = `${urlBase}/ws/canvas/${encodeURIComponent(clientIdRef.current)}`
+		const cid = profileRef.current!.clientId
+		const url = `${urlBase}/ws/canvas/${encodeURIComponent(cid)}`
 		const ws = new WebSocket(url)
 		wsRef.current = ws
 
 		ws.onmessage = (ev) => {
-			const parsed = parseMessage(ev.data as string)
-			if (!parsed) return
-			const { action, data } = parsed
+			const full = parseWireMessage(ev.data as string)
+			if (!full) return
+			const { action, data, client_id } = full
+
+			if (action === 'cursor' && client_id && client_id !== profileRef.current!.clientId) {
+				const x = Number(data.x)
+				const y = Number(data.y)
+				if (!Number.isFinite(x) || !Number.isFinite(y)) return
+				const rawLabel = data.label
+				const label =
+					typeof rawLabel === 'string' && rawLabel.trim()
+						? rawLabel.trim()
+						: client_id === AGENT_CANVAS_CLIENT_ID
+							? 'Agent'
+							: client_id.length > 18
+								? `${client_id.slice(0, 14)}…`
+								: client_id
+				setRemoteCursors((prev) => ({
+					...prev,
+					[client_id]: { x, y, label, at: Date.now() },
+				}))
+				return
+			}
+
 			if (action === 'init') {
 				const elements = (data as { elements?: Record<string, WireServerElement> }).elements
 				if (elements && typeof elements === 'object') {
@@ -100,6 +152,7 @@ export function CanvasWsSync() {
 		}
 		ws.onclose = () => {
 			setWsReady(false)
+			setRemoteCursors({})
 			bump((n) => n + 1)
 		}
 		ws.onerror = () => bump((n) => n + 1)
@@ -111,7 +164,80 @@ export function CanvasWsSync() {
 		}
 	}, [editor])
 
-	return <TentativeGhostHud enabled={wsReady} sendCanvasPatch={sendCanvasPatch} />
+	useEffect(() => {
+		if (!wsReady) return
+		const el = editor.getContainer()
+		let lastSend = 0
+		const onMove = (e: PointerEvent) => {
+			const now = Date.now()
+			if (now - lastSend < CURSOR_SEND_MS) return
+			lastSend = now
+			const p = editor.screenToPage({ x: e.clientX, y: e.clientY })
+			sendCanvasPatch('cursor', {
+				x: p.x,
+				y: p.y,
+				label: profileRef.current!.displayLabel,
+			})
+		}
+		el.addEventListener('pointermove', onMove)
+		return () => el.removeEventListener('pointermove', onMove)
+	}, [editor, wsReady, sendCanvasPatch])
+
+	useEffect(() => {
+		const t = window.setInterval(() => {
+			const cutoff = Date.now() - CURSOR_STALE_MS
+			setRemoteCursors((prev) => {
+				const next: Record<string, RemoteCursor> = {}
+				for (const [k, v] of Object.entries(prev)) {
+					if (v.at >= cutoff) next[k] = v
+				}
+				return Object.keys(next).length === Object.keys(prev).length ? prev : next
+			})
+		}, 2000)
+		return () => window.clearInterval(t)
+	}, [])
+
+	return (
+		<>
+			<RemotePresenceCursors cursors={remoteCursors} />
+			<TentativeGhostHud enabled={wsReady} sendCanvasPatch={sendCanvasPatch} />
+		</>
+	)
+}
+
+function RemotePresenceCursors({ cursors }: { cursors: Record<string, RemoteCursor> }) {
+	const editor = useEditor()
+	const cameraSig = useValue('presence-cam', () => editor.getCamera(), [editor])
+
+	const pins = useMemo(() => {
+		void cameraSig
+		const now = Date.now()
+		return Object.entries(cursors)
+			.filter(([, c]) => now - c.at < CURSOR_STALE_MS)
+			.map(([id, c]) => {
+				const scr = editor.pageToScreen({ x: c.x, y: c.y })
+				return { id, left: scr.x, top: scr.y, label: c.label, hue: hueForClientId(id) }
+			})
+	}, [editor, cursors, cameraSig])
+
+	return (
+		<>
+			{pins.map((p) => (
+				<div
+					key={p.id}
+					className="canvas-remote-cursor"
+					style={{
+						left: p.left,
+						top: p.top,
+						['--cursor-hue' as string]: String(p.hue),
+					}}
+				>
+					<span className="canvas-remote-cursor__dot" aria-hidden />
+					<span className="canvas-remote-cursor__name">{p.label}</span>
+				</div>
+			))}
+		</>
+	)
 }
 
 function TentativeGhostHud({

@@ -267,6 +267,39 @@ body {
 	}
 }
 
+.canvas-remote-cursor {
+	position: fixed;
+	z-index: 1999;
+	pointer-events: none;
+	transform: translate(-2px, -2px);
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+}
+
+.canvas-remote-cursor__dot {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	border: 2px solid #fff;
+	box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+	background: hsl(var(--cursor-hue, 200), 75%, 52%);
+}
+
+.canvas-remote-cursor__name {
+	font-size: 10px;
+	font-weight: 600;
+	padding: 1px 5px;
+	border-radius: 4px;
+	background: rgba(20, 20, 20, 0.88);
+	color: #fafafa;
+	white-space: nowrap;
+	max-width: 140px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 .wire-ghost-actions {
 	position: fixed;
 	z-index: 2000;
