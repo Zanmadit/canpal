@@ -25,6 +25,9 @@ import { TargetShapeTool } from './tools/TargetShapeTool'
 // Customize tldraw's styles to play to the agent's strengths
 DefaultSizeStyle.setDefaultValue('s')
 
+/** IndexedDB namespace for tldraw. Bump when upgrading tldraw major/minor if stale data breaks load. */
+const TLDRAW_PERSISTENCE_KEY = 'canpal-tldraw-v4'
+
 // Custom tools for picking context items
 const tools = [TargetShapeTool, TargetAreaTool]
 const overrides: TLUiOverrides = {
@@ -89,7 +92,7 @@ function App() {
 			<div className="tldraw-agent-container">
 				<div className="tldraw-canvas">
 					<Tldraw
-						persistenceKey="tldraw-agent-demo"
+						persistenceKey={TLDRAW_PERSISTENCE_KEY}
 						tools={tools}
 						overrides={overrides}
 						components={components}
