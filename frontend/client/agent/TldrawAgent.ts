@@ -10,6 +10,7 @@ import { ContextItem } from '../../shared/types/ContextItem'
 import { PromptPart } from '../../shared/types/PromptPart'
 import { Streaming } from '../../shared/types/Streaming'
 import { TodoItem } from '../../shared/types/TodoItem'
+import { backendAuthHeaders } from '../../shared/backendAuth'
 import { AgentHelpers } from '../AgentHelpers'
 import { getModeNode } from '../modes/AgentModeChart'
 import { AgentModeType } from '../modes/AgentModeDefinitions'
@@ -690,6 +691,7 @@ export class TldrawAgent {
 			body: JSON.stringify(prompt),
 			headers: {
 				'Content-Type': 'application/json',
+				...backendAuthHeaders(),
 			},
 			signal,
 		})

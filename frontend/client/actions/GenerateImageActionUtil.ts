@@ -1,4 +1,5 @@
 import { createShapeId, type TLGeoShape, type TLImageShape } from 'tldraw'
+import { backendAuthHeaders } from '../../shared/backendAuth'
 import { GenerateImageAction } from '../../shared/schema/AgentActionSchemas'
 import { Streaming } from '../../shared/types/Streaming'
 import { AgentHelpers } from '../AgentHelpers'
@@ -46,7 +47,7 @@ export const GenerateImageActionUtil = registerActionUtil(
 
 			const res = await fetch(`${apiBase()}/api/images/generate`, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: { 'Content-Type': 'application/json', ...backendAuthHeaders() },
 				body: JSON.stringify({
 					prompt,
 					model: model === 'default' ? null : model,

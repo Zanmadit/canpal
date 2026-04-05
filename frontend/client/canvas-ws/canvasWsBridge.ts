@@ -1,3 +1,5 @@
+import { backendAuthHeaders } from '../../shared/backendAuth'
+
 export type CanvasWsBridge = {
 	/** Prefer WebSocket `agent_prompt` when connected; else POST /api/agent/prompt. */
 	sendAgentPrompt: (text: string) => Promise<void>
@@ -26,7 +28,7 @@ export async function sendAgentPromptHttp(message: string): Promise<void> {
 	if (!text) return
 	const res = await fetch(`${apiBase()}/api/agent/prompt`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: { 'Content-Type': 'application/json', ...backendAuthHeaders() },
 		body: JSON.stringify({ message: text }),
 	})
 	if (!res.ok) {

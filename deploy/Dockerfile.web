@@ -4,9 +4,11 @@ WORKDIR /build
 
 ARG VITE_API_BASE_URL=http://localhost
 ARG VITE_CANVAS_WS_URL=http://localhost
+ARG VITE_BACKEND_API_KEY=
 
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 ENV VITE_CANVAS_WS_URL=$VITE_CANVAS_WS_URL
+ENV VITE_BACKEND_API_KEY=$VITE_BACKEND_API_KEY
 
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci

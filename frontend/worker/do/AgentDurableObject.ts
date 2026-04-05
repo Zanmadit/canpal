@@ -71,9 +71,6 @@ export class AgentDurableObject extends DurableObject<Environment> {
 				Connection: 'keep-alive',
 				'X-Accel-Buffering': 'no',
 				'Transfer-Encoding': 'chunked',
-				'Access-Control-Allow-Origin': '*',
-				'Access-Control-Allow-Methods': 'POST, OPTIONS',
-				'Access-Control-Allow-Headers': 'Content-Type',
 			},
 		})
 	}

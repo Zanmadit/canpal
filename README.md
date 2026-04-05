@@ -73,6 +73,14 @@ Restart `npm run dev`. With this set, the app opens a WebSocket to `/ws/canvas/{
 
 ---
 
+## Security and deployment
+
+- **Do not expose** the FastAPI (`8000`) or stream (`3000`) ports directly on the public internet unless you add your own hardening. Prefer the Docker layout where only **nginx** (`web`) publishes HTTP(S) and proxies `/api`, `/ws`, and `/stream` to internal services.
+- **`BACKEND_API_KEY` (optional):** When set, all `/api/*` routes require `Authorization: Bearer <key>` or `X-API-Key`. The canvas WebSocket accepts the same value as query `?token=`, `Authorization`, or `X-API-Key`. The Node stream server enforces the same key on `POST /stream`. The browser cannot send custom headers on WebSockets reliably, so the SPA appends `?token=` when you set **`VITE_BACKEND_API_KEY`** to the same value (this is **visible** in the bundle—use strict **`CORS_ALLOW_ORIGINS`** and network isolation, not public anonymity).
+- **`CORS_ALLOW_ORIGINS`:** Defaults in code and Docker Compose are **explicit local dev origins**, not `*`. For production, set this to your real browser origin(s), including scheme and port (e.g. `https://app.example.com`). Wildcard `*` is only for quick local experiments.
+
+---
+
 ## Configuration
 
 ### Backend (`backend/.env` or repo root `.env`)
@@ -81,11 +89,12 @@ Restart `npm run dev`. With this set, the app opens a WebSocket to `/ws/canvas/{
 |----------|---------|
 | `OPENAI_API_KEY` | Required for `/api/agent/*` and Whisper |
 | `OPENAI_MODEL` | Chat model for canvas agent (default `gpt-4o-mini`) |
-| `PROACTIVE_ORGANIZER_ENABLED` | `true` / `false` — periodic “organize messy board” nudge |
+| `BACKEND_API_KEY` | Optional shared secret for `/api/*`, WebSocket, and stream server |
+| `PROACTIVE_ORGANIZER_ENABLED` | `true` / `false` — periodic “organize messy board” nudge (default off) |
 | `PROACTIVE_ORGANIZER_INTERVAL_SEC` | Poll interval (default `30`) |
 | `PROACTIVE_ORGANIZER_COOLDOWN_SEC` | Min seconds between organizer runs (default `120`) |
 | `HIGGSFIELD_CREDENTIALS` or `HIGGSFIELD_API_KEY` + `HIGGSFIELD_API_SECRET` | Image generation |
-| `CORS_ALLOW_ORIGINS` | `*` or comma-separated origins (see `main.py` for credentials behavior) |
+| `CORS_ALLOW_ORIGINS` | Comma-separated origins, or `*` (wildcard disables credentialed CORS) |
 
 ### Frontend — Worker models (`frontend/.dev.vars`)
 
@@ -96,6 +105,7 @@ Keys for Anthropic / OpenAI / Google as used by the **Cloudflare Worker** agent 
 | Variable | Purpose |
 |----------|---------|
 | `VITE_API_BASE_URL` | FastAPI origin (default `http://127.0.0.1:8000`) |
+| `VITE_BACKEND_API_KEY` | Optional; must match `BACKEND_API_KEY` when the API requires auth. Docker: set `BACKEND_API_KEY` when building `web` so the SPA embeds it (see compose build args) |
 | `VITE_CANVAS_WS_URL` | WebSocket origin for canvas sync (e.g. `ws://127.0.0.1:8000`) |
 | `VITE_CANVAS_CLIENT_ID` | Fixed WS path id for demos |
 | `VITE_CANVAS_DISPLAY_NAME` | Pretty label when using a fixed client id |

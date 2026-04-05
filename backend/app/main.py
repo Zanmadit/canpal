@@ -1,9 +1,10 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 from config import settings
+from app.deps import require_backend_api_key
 from app.services.connection_manager import manager
 from app.services.canvas_agent import run_agent_turn
 from app.services.higgsfield_image import credentials_configured, generate_image_bytes
@@ -19,15 +20,18 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(proactive_organizer_loop())
+    task: asyncio.Task[None] | None = None
+    if settings.PROACTIVE_ORGANIZER_ENABLED:
+        task = asyncio.create_task(proactive_organizer_loop())
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title="Brainstorm AI Agent API", lifespan=lifespan)
@@ -39,10 +43,10 @@ if _cors_raw == "*":
 else:
     _allow_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
     if not _allow_origins:
-        _allow_origins = ["*"]
-        _allow_credentials = False
-    else:
-        _allow_credentials = True
+        raise RuntimeError(
+            "CORS_ALLOW_ORIGINS is empty; set a comma-separated list of origins or '*' explicitly."
+        )
+    _allow_credentials = True
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,7 +65,7 @@ class AgentPromptBody(BaseModel):
     message: str
 
 
-@app.post("/api/agent/prompt")
+@app.post("/api/agent/prompt", dependencies=[Depends(require_backend_api_key)])
 async def agent_prompt(body: AgentPromptBody):
     """Run OpenAI as an in-process canvas participant; changes broadcast over WebSockets."""
     text = body.message.strip()
@@ -70,7 +74,7 @@ async def agent_prompt(body: AgentPromptBody):
     return await run_agent_turn(text)
 
 
-@app.post("/api/agent/voice")
+@app.post("/api/agent/voice", dependencies=[Depends(require_backend_api_key)])
 async def agent_voice(audio: UploadFile = File(...)):
     """Whisper-1 transcription, then same canvas agent as /api/agent/prompt."""
     raw = await audio.read()
@@ -78,7 +82,7 @@ async def agent_voice(audio: UploadFile = File(...)):
     return await transcribe_and_draw(raw, filename=name)
 
 
-@app.post("/api/agent/transcribe")
+@app.post("/api/agent/transcribe", dependencies=[Depends(require_backend_api_key)])
 async def agent_transcribe(audio: UploadFile = File(...)):
     """Whisper-1 transcription only. Frontend runs the tldraw (Worker) agent."""
     raw = await audio.read()
@@ -91,7 +95,7 @@ class ImageGenerateBody(BaseModel):
     model: str | None = None
 
 
-@app.post("/api/images/generate")
+@app.post("/api/images/generate", dependencies=[Depends(require_backend_api_key)])
 async def api_images_generate(body: ImageGenerateBody):
     """Text-to-image via Higgsfield; browser pastes bytes onto tldraw."""
     if not credentials_configured():
@@ -110,6 +114,15 @@ async def api_images_generate(body: ImageGenerateBody):
 
 @app.websocket("/ws/canvas/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    expected = (settings.BACKEND_API_KEY or "").strip()
+    if expected:
+        token = (websocket.query_params.get("token") or "").strip()
+        auth = websocket.headers.get("authorization") or ""
+        bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        x_key = (websocket.headers.get("x-api-key") or "").strip()
+        if token != expected and bearer != expected and x_key != expected:
+            await websocket.close(code=1008)
+            return
     await manager.connect(websocket)
     try:
         while True:

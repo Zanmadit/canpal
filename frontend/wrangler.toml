@@ -7,6 +7,9 @@ preview_urls = true
 [observability]
 enabled = true
 
+# Optional Worker vars (set in dashboard or wrangler secret):
+# CORS_ALLOW_ORIGINS = "https://your-app.example,http://127.0.0.1:5173"  (comma-separated, or * for any)
+
 [[routes]]
 pattern = "agent.templates.tldraw.dev"
 custom_domain = true

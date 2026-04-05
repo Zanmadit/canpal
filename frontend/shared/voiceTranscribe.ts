@@ -1,3 +1,5 @@
+import { backendAuthHeaders } from './backendAuth'
+
 function apiBase(): string {
 	const raw = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
 	return raw.replace(/\/$/, '')
@@ -22,6 +24,7 @@ export async function transcribeAudioBlob(
 	try {
 		res = await fetch(`${apiBase()}/api/agent/transcribe`, {
 			method: 'POST',
+			headers: { ...backendAuthHeaders() },
 			body: form,
 		})
 	} catch (e) {

@@ -10,6 +10,7 @@ import {
 	syncWireInit,
 	type WireServerElement,
 } from './wireGeoUpsert'
+import { canvasWsAuthQuery } from '../../shared/backendAuth'
 
 /** Must match `AGENT_CLIENT_ID` in FastAPI `connection_manager.py`. */
 const AGENT_CANVAS_CLIENT_ID = 'openai-agent'
@@ -126,7 +127,7 @@ export function CanvasWsSync() {
 		if (!urlBase) return
 
 		const cid = profileRef.current!.clientId
-		const url = `${urlBase}/ws/canvas/${encodeURIComponent(cid)}`
+		const url = `${urlBase}/ws/canvas/${encodeURIComponent(cid)}${canvasWsAuthQuery()}`
 		const ws = new WebSocket(url)
 		wsRef.current = ws
 
