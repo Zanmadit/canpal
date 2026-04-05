@@ -54,6 +54,8 @@ class ActionType(str, Enum):
     CREATE = "create"
     UPDATE = "update"
     DELETE = "delete"
+    # Client sends many element payloads in one message (reconnect reconcile); one broadcast.
+    SYNC_BATCH = "sync_batch"
     CURSOR = "cursor"
     # data: {"message": "..."} — run canvas agent; does not mutate elements by itself.
     AGENT_PROMPT = "agent_prompt"

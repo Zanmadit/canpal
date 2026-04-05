@@ -5,6 +5,7 @@ import {
 	TLGeoShape,
 	TLGeoShapeGeoStyle,
 	TLShapeId,
+	renderPlaintextFromRichText,
 	toRichText,
 } from 'tldraw'
 import { asColor } from '../../shared/format/FocusedColor'
@@ -92,6 +93,80 @@ function isDrawSegment(v: unknown): v is TLDrawShapeSegment {
 	if (!v || typeof v !== 'object') return false
 	const o = v as { type?: string; path?: string }
 	return (o.type === 'free' || o.type === 'straight') && typeof o.path === 'string'
+}
+
+function numApproxEq(a: number, b: number): boolean {
+	return Math.abs(a - b) < 1e-5
+}
+
+function isRemoteDrawNoOp(editor: Editor, el: WireServerElement): boolean {
+	if (el.type !== 'draw') return false
+	const raw = el.segments
+	if (!Array.isArray(raw) || raw.length === 0) return false
+	const segments = raw.filter(isDrawSegment) as TLDrawShapeSegment[]
+	if (segments.length === 0) return false
+	const id = toShapeId(el.id)
+	const existing = editor.getShape(id) as TLDrawShape | undefined
+	if (!existing || existing.type !== 'draw') return false
+
+	const wireStatus = el.status === 'tentative' ? 'tentative' : 'committed'
+	const tentative = wireStatus === 'tentative'
+	const meta = existing.meta as { wireStatus?: string }
+	if ((meta?.wireStatus === 'tentative') !== tentative) return false
+
+	const wantOpacity = tentative ? 0.5 : 1
+	if (!numApproxEq(existing.opacity, wantOpacity)) return false
+
+	const dx = Number(el.x) || 0
+	const dy = Number(el.y) || 0
+	const dr = Number(el.rotation) || 0
+	if (!numApproxEq(existing.x, dx) || !numApproxEq(existing.y, dy) || !numApproxEq(existing.rotation, dr))
+		return false
+
+	const p = existing.props
+	if (p.color !== asColor(el.color || 'black')) return false
+	if (p.fill !== (mapFill(el.fill) as TLDrawShape['props']['fill'])) return false
+	if (p.dash !== (mapDash(el.dash) as TLDrawShape['props']['dash'])) return false
+	if (p.size !== mapDrawSize(el.size_style ?? undefined)) return false
+	if (Boolean(p.isComplete) !== (el.is_complete !== false)) return false
+	if (Boolean(p.isClosed) !== Boolean(el.is_closed)) return false
+	if (Boolean(p.isPen) !== (el.is_pen !== false)) return false
+	if (!numApproxEq(p.scale, Number(el.scale) || 1)) return false
+	if (!numApproxEq(p.scaleX, Number(el.scale_x) || 1)) return false
+	if (!numApproxEq(p.scaleY, Number(el.scale_y) || 1)) return false
+	return JSON.stringify(p.segments) === JSON.stringify(segments)
+}
+
+function isRemoteGeoNoOp(editor: Editor, el: WireServerElement): boolean {
+	if (el.type !== 'geo') return false
+	const id = toShapeId(el.id)
+	const existing = editor.getShape(id) as TLGeoShape | undefined
+	if (!existing || existing.type !== 'geo') return false
+
+	const wireStatus = el.status === 'tentative' ? 'tentative' : 'committed'
+	const tentative = wireStatus === 'tentative'
+	const meta = existing.meta as { wireStatus?: string }
+	if ((meta?.wireStatus === 'tentative') !== tentative) return false
+
+	const wantOpacity = tentative ? 0.5 : 1
+	if (!numApproxEq(existing.opacity, wantOpacity)) return false
+
+	const w = Math.max(8, Number(el.width) || 120)
+	const h = Math.max(8, Number(el.height) || 80)
+	const dx = Number(el.x) || 0
+	const dy = Number(el.y) || 0
+	const dr = Number(el.rotation) || 0
+	if (!numApproxEq(existing.x, dx) || !numApproxEq(existing.y, dy) || !numApproxEq(existing.rotation, dr))
+		return false
+
+	const p = existing.props
+	if (!numApproxEq(p.w, w) || !numApproxEq(p.h, h)) return false
+	if (p.color !== asColor(el.color || 'light-blue')) return false
+	if (p.fill !== mapFill(el.fill)) return false
+	if (p.dash !== mapDash(el.dash)) return false
+	if (p.geo !== mapGeoStyle(el.geo_style)) return false
+	const text = renderPlaintextFromRichText(editor, p.richText)
+	return text === (el.text || '')
 }
 
 function upsertWireDrawInRun(editor: Editor, el: WireServerElement) {
@@ -224,38 +299,59 @@ export function upsertWireGeo(editor: Editor, el: WireServerElement) {
 	editor.run(() => upsertWireGeoInRun(editor, el))
 }
 
-/** Apply one server element (geo or draw). */
-export function applyWireServerElement(editor: Editor, el: WireServerElement) {
-	if (el.type === 'draw') {
-		editor.run(() => upsertWireDrawInRun(editor, el))
-	} else if (el.type === 'geo') {
-		editor.run(() => upsertWireGeoInRun(editor, el))
+function deleteWireShapeInRun(editor: Editor, rawId: string) {
+	const id = toShapeId(rawId)
+	const sh = editor.getShape(id)
+	if (sh && (sh.type === 'geo' || sh.type === 'draw')) {
+		editor.deleteShape(id)
 	}
 }
 
-export function deleteWireShape(editor: Editor, rawId: string) {
-	const id = toShapeId(rawId)
+/** Apply remote deletes and upserts in a single transaction (reduces repaint flicker). */
+export function applyRemoteWireOpsBatch(
+	editor: Editor,
+	ops: { deletes: string[]; upserts: WireServerElement[] }
+) {
 	editor.run(() => {
-		const sh = editor.getShape(id)
-		if (sh && (sh.type === 'geo' || sh.type === 'draw')) {
-			editor.deleteShape(id)
+		for (const rawId of ops.deletes) {
+			deleteWireShapeInRun(editor, rawId)
+		}
+		for (const el of ops.upserts) {
+			if (el.type === 'draw') {
+				if (!isRemoteDrawNoOp(editor, el)) upsertWireDrawInRun(editor, el)
+			} else if (el.type === 'geo') {
+				if (!isRemoteGeoNoOp(editor, el)) upsertWireGeoInRun(editor, el)
+			}
 		}
 	})
 }
 
+/** Apply one server element (geo or draw). */
+export function applyWireServerElement(editor: Editor, el: WireServerElement) {
+	applyRemoteWireOpsBatch(editor, { deletes: [], upserts: [el] })
+}
+
+export function deleteWireShape(editor: Editor, rawId: string) {
+	applyRemoteWireOpsBatch(editor, { deletes: [rawId], upserts: [] })
+}
+
 export function syncWireInit(editor: Editor, elements: Record<string, WireServerElement>) {
 	const ids = new Set(Object.keys(elements).map((k) => toShapeId(k)))
+	const serverCount = Object.keys(elements).length
 	editor.run(() => {
-		const stale = editor
+		const localWire = editor
 			.getCurrentPageShapes()
 			.filter(
-				(s) =>
-					s.meta?.wireManaged === true &&
-					(s.type === 'geo' || s.type === 'draw') &&
-					!ids.has(s.id)
+				(s) => s.meta?.wireManaged === true && (s.type === 'geo' || s.type === 'draw')
 			)
-		if (stale.length) {
-			editor.deleteShapes(stale.map((s) => s.id))
+		// Empty server snapshot often arrives before reconcile updates are merged; deleting here
+		// would flash-wipe persisted local strokes (see CanvasWsSync init vs onopen ordering).
+		const skipStaleDelete = serverCount === 0 && localWire.length > 0
+		if (!skipStaleDelete) {
+			const stale = localWire.filter((s) => !ids.has(s.id))
+			if (stale.length) {
+				editor.deleteShapes(stale.map((s) => s.id))
+			}
 		}
 		for (const el of Object.values(elements)) {
 			if (el.type === 'geo') upsertWireGeoInRun(editor, el)

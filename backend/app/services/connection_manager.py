@@ -56,22 +56,32 @@ class ConnectionManager:
         for connection in self.active_connections:
             await connection.send_text(message)
 
+    def _merge_create_or_update(self, patch: dict) -> None:
+        _coerce_element_status(patch)
+        eid = patch.get("id")
+        if not eid or not isinstance(eid, str):
+            return
+        if eid in self.board_state.elements:
+            merged = self.board_state.elements[eid].model_dump()
+            merged.update(patch)
+            self.board_state.elements[eid] = CanvasElement.model_validate(merged)
+        else:
+            self.board_state.elements[eid] = CanvasElement.model_validate(patch)
+
     def process_element_update(self, msg: WebSocketMessage):
         """Update the server's source of truth based on incoming actions."""
         if msg.action == ActionType.AGENT_PROMPT:
             return
-        if msg.action in (ActionType.CREATE, ActionType.UPDATE):
-            patch = dict(msg.data)
-            _coerce_element_status(patch)
-            eid = patch.get("id")
-            if not eid or not isinstance(eid, str):
+        if msg.action == ActionType.SYNC_BATCH:
+            elements = msg.data.get("elements")
+            if not isinstance(elements, list):
                 return
-            if eid in self.board_state.elements:
-                merged = self.board_state.elements[eid].model_dump()
-                merged.update(patch)
-                self.board_state.elements[eid] = CanvasElement.model_validate(merged)
-            else:
-                self.board_state.elements[eid] = CanvasElement.model_validate(patch)
+            for item in elements:
+                if isinstance(item, dict):
+                    self._merge_create_or_update(dict(item))
+            return
+        if msg.action in (ActionType.CREATE, ActionType.UPDATE):
+            self._merge_create_or_update(dict(msg.data))
         elif msg.action == ActionType.DELETE:
             element_id = msg.data.get("id")
             if element_id in self.board_state.elements:

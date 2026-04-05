@@ -5,8 +5,7 @@ import { isCollabWireShapeType, shapeToWirePayload } from './collabShapeWire'
 import { resolveCanvasProfile } from './canvasProfile'
 import { sendAgentPromptHttp, setCanvasWsBridge, type CanvasWsBridge } from './canvasWsBridge'
 import {
-	applyWireServerElement,
-	deleteWireShape,
+	applyRemoteWireOpsBatch,
 	syncWireInit,
 	type WireServerElement,
 } from './wireGeoUpsert'
@@ -54,21 +53,23 @@ function hueForClientId(id: string): number {
 	return h % 360
 }
 
-/** Push every geo/draw on the page so the server has strokes drawn before the socket opened (or while disconnected). */
+/** Push every geo/draw in one message so peers get one broadcast (not N). */
 function reconcilePageCollabWireShapesToServer(editor: Editor, ws: WebSocket, clientId: string): void {
 	if (ws.readyState !== WebSocket.OPEN) return
+	const elements: Record<string, unknown>[] = []
 	for (const shape of editor.getCurrentPageShapes()) {
 		if (!isCollabWireShapeType(shape.type)) continue
 		const payload = shapeToWirePayload(editor, shape)
-		if (!payload) continue
-		ws.send(
-			JSON.stringify({
-				action: 'update',
-				data: payload,
-				client_id: clientId,
-			})
-		)
+		if (payload) elements.push(payload)
 	}
+	if (elements.length === 0) return
+	ws.send(
+		JSON.stringify({
+			action: 'sync_batch',
+			data: { elements },
+			client_id: clientId,
+		})
+	)
 }
 
 type RemoteCursor = { x: number; y: number; label: string; at: number }
@@ -131,6 +132,59 @@ export function CanvasWsSync() {
 		const ws = new WebSocket(url)
 		wsRef.current = ws
 
+		const remotePending = {
+			upserts: new Map<string, WireServerElement>(),
+			deletes: new Set<string>(),
+		}
+		let flushRaf: number | null = null
+
+		const wireKeyFromElement = (el: WireServerElement): string => {
+			const raw = el.id
+			if (typeof raw !== 'string') return ''
+			return raw.startsWith('shape:') ? raw.slice('shape:'.length) : raw
+		}
+
+		const normalizeWireKey = (rawId: string): string =>
+			rawId.startsWith('shape:') ? rawId.slice('shape:'.length) : rawId
+
+		const flushRemotePending = () => {
+			if (remotePending.deletes.size === 0 && remotePending.upserts.size === 0) return
+			const deletes = [...remotePending.deletes]
+			const upserts = [...remotePending.upserts.values()]
+			remotePending.deletes.clear()
+			remotePending.upserts.clear()
+			applyingRemoteRef.current = true
+			try {
+				applyRemoteWireOpsBatch(editor, { deletes, upserts })
+			} finally {
+				applyingRemoteRef.current = false
+			}
+		}
+
+		const scheduleRemoteFlush = () => {
+			if (flushRaf != null) return
+			flushRaf = requestAnimationFrame(() => {
+				flushRaf = null
+				flushRemotePending()
+			})
+		}
+
+		const queueRemoteUpsert = (el: WireServerElement) => {
+			const key = wireKeyFromElement(el)
+			if (!key) return
+			remotePending.deletes.delete(key)
+			remotePending.upserts.set(key, el)
+			scheduleRemoteFlush()
+		}
+
+		const queueRemoteDelete = (rawId: string) => {
+			const key = normalizeWireKey(rawId)
+			if (!key) return
+			remotePending.upserts.delete(key)
+			remotePending.deletes.add(key)
+			scheduleRemoteFlush()
+		}
+
 		ws.onmessage = (ev) => {
 			const full = parseWireMessage(ev.data as string)
 			if (!full) return
@@ -169,28 +223,38 @@ export function CanvasWsSync() {
 				}
 				return
 			}
+			if (action === 'sync_batch') {
+				if (client_id === selfId) return
+				const rawList = (data as { elements?: unknown }).elements
+				if (!Array.isArray(rawList)) return
+				const upserts: WireServerElement[] = []
+				for (const item of rawList) {
+					if (!item || typeof item !== 'object') continue
+					const el = item as WireServerElement
+					if (!isCollabWireShapeType(el.type)) continue
+					upserts.push(el)
+				}
+				if (upserts.length === 0) return
+				applyingRemoteRef.current = true
+				try {
+					applyRemoteWireOpsBatch(editor, { deletes: [], upserts })
+				} finally {
+					applyingRemoteRef.current = false
+				}
+				return
+			}
 			if (action === 'create' || action === 'update') {
 				if (client_id === selfId) return
 				const el = data as unknown as WireServerElement
 				if (!isCollabWireShapeType(el.type)) return
-				applyingRemoteRef.current = true
-				try {
-					applyWireServerElement(editor, el)
-				} finally {
-					applyingRemoteRef.current = false
-				}
+				queueRemoteUpsert(el)
 				return
 			}
 			if (action === 'delete') {
 				if (client_id === selfId) return
 				const id = (data as { id?: string }).id
 				if (typeof id === 'string') {
-					applyingRemoteRef.current = true
-					try {
-						deleteWireShape(editor, id)
-					} finally {
-						applyingRemoteRef.current = false
-					}
+					queueRemoteDelete(id)
 				}
 			}
 		}
@@ -208,6 +272,12 @@ export function CanvasWsSync() {
 		ws.onerror = () => bump((n) => n + 1)
 
 		return () => {
+			if (flushRaf != null) {
+				cancelAnimationFrame(flushRaf)
+				flushRaf = null
+			}
+			remotePending.deletes.clear()
+			remotePending.upserts.clear()
 			wsRef.current = null
 			setWsReady(false)
 			ws.close()
