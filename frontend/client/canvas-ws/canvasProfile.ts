@@ -1,3 +1,5 @@
+import { randomUuidV4 } from '../lib/randomUuid'
+
 export type CanvasParticipantProfile = {
 	/** WebSocket path segment; unique per tab/session. */
 	clientId: string
@@ -29,6 +31,6 @@ export function resolveCanvasProfile(): CanvasParticipantProfile {
 		}
 	}
 
-	const id = `user-${crypto.randomUUID().slice(0, 8)}`
+	const id = `user-${randomUuidV4().replace(/-/g, '').slice(0, 8)}`
 	return { clientId: id, displayLabel: envLabel || 'Guest' }
 }
