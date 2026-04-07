@@ -9,7 +9,7 @@ Together, you can pitch the product as: *the AI is not only a chat sidebar — i
 
 An overview diagram (if present) lives at [docs/architecture.png](docs/architecture.png).
 
-[Task]("/docs/🧠 Hackathon Brief_ AI Brainstorm Canvas.pdf")
+![Task](/docs/🧠 Hackathon Brief_ AI Brainstorm Canvas.pdf)
 
 ---
 
